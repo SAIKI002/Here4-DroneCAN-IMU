@@ -1,4 +1,4 @@
-# Here4 GPS — Firmware Extraction & Recovery
+# Here4 GPS — Firmware Extraction 
 
 Technical documentation of a low-level firmware-debugging investigation performed on a **Here4 GPS module** during internship research at the **Center of Excellence (CoE) in Complex & Nonlinear Dynamical Systems (CNDS), VJTI**.
 
