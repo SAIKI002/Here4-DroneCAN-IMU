@@ -8,7 +8,7 @@ The work focused on establishing **ARM Serial Wire Debug (SWD)** access to the H
 >
 > This repository is a technical record of work performed during the internship at **CoE-CNDS, VJTI**. The associated hardware, firmware, proprietary materials, experimental data, and project intellectual property remain the property of **CoE-CNDS / VJTI**, unless otherwise stated. This repository should not be interpreted as a transfer or claim of ownership by the author.
 >
-> The raw firmware image is **not included** in this public repository. Its identity is documented by metadata and a SHA-256 hash only.
+> The raw firmware image is **not included** in this public repository. 
 
 ## Scope
 
