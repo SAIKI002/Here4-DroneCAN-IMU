@@ -1,268 +1,240 @@
-# Here4 GPS — Firmware Extraction 
+# Here4 GPS — Firmware Extraction & DroneCAN/IMU Analysis
 
-Technical documentation of a low-level firmware-debugging investigation performed on a **Here4 GPS module** during internship research at the **Center of Excellence (CoE) in Complex & Nonlinear Dynamical Systems (CNDS), VJTI**.
+This project investigates the **Here4 GNSS/IMU module**, its **STM32F302K8 microcontroller**, and its communication with the **Cube Orange+ flight controller through DroneCAN**. The work combines low-level firmware debugging and extraction using **SEGGER J-Link/SWD** with analysis of the Here4 sensor-data path, particularly GPS, magnetometer, accelerometer, and gyroscope data. The aim was to establish low-level access to the Here4, inspect and preserve its firmware, understand its DroneCAN communication path, and investigate how its IMU data is published and received by the flight controller.
 
-The work focused on establishing **ARM Serial Wire Debug (SWD)** access to the Here4's **STM32F302K8**, determining its readout-protection state, inspecting Flash/vector-table contents, creating a controlled 64 KiB firmware backup, and documenting the erase/recovery workflow.
 
-> **Ownership & attribution**
+> **Ownership & Attribution**
 >
-> This repository is a technical record of work performed during the internship at **CoE-CNDS, VJTI**. The associated hardware, firmware, proprietary materials, experimental data, and project intellectual property remain the property of **CoE-CNDS / VJTI**, unless otherwise stated. This repository should not be interpreted as a transfer or claim of ownership by the author.
+> This work was performed during an internship at **CoE-CNDS, VJTI**. The associated hardware, firmware, proprietary materials, experimental data, and internship-related intellectual property remain the property of **CoE-CNDS / VJTI**.
 >
-> The raw firmware image is **not included** in this public repository. 
+> The raw firmware image is **not included** in this repository.
 
-## Scope
+---
 
-- Here4 GPS hardware investigation
-- STM32F302K8 target identification
-- SWD communication using SEGGER J-Link
-- Debug Port / SW-DP discovery
-- CPU register and vector-table inspection
-- STM32 readout-protection (RDP) analysis
-- Raw Flash extraction and backup validation
-- Controlled Flash erase
-- Firmware restoration workflow
-- Evidence-based documentation of limitations and verification status
+## 1. Firmware Extraction
 
-## Hardware Architecture
-
-```text
-Here4 GPS Module
-       │
-       ▼
-STM32F302K8
-       │
-       ▼
-Accessible debug/test points
-       │
-       │  SWDIO / SWCLK / NRST / VTref / GND
-       ▼
-SEGGER J-Link
-       │
-       │ USB
-       ▼
-PC / J-Link Commander
-```
-
-The **KORE hardware was used to provide physical access to the debugging interface** in the setup. It was not the firmware target for this Here4 extraction.
-
-## Target MCU
+### Target
 
 | Parameter | Value |
 |---|---|
 | MCU | STM32F302K8 |
 | CPU | Arm Cortex-M4 with FPU |
-| Maximum CPU frequency | 72 MHz |
-| Main Flash | 64 KiB |
+| Flash | 64 KiB |
 | SRAM | 16 KiB |
-| Main Flash | `0x08000000 – 0x0800FFFF` |
+| Flash Address | `0x08000000 – 0x0800FFFF` |
 | SWDIO | PA13 |
 | SWCLK | PA14 |
-| Reset | NRST, active-low |
+| Reset | NRST |
 
-## SWD / J-Link Interface
+The **KORE hardware was used to provide physical access to the debugging interface**. It was not the firmware target.
 
-| Signal | STM32F302K8 | J-Link ARM 20-pin |
-|---|---|---:|
-| VTref | Target VDD/reference | 1 |
-| SWDIO | PA13 | 7 |
-| SWCLK | PA14 | 9 |
-| NRST | NRST | 15 |
-| GND | VSS/GND | 4, 6, 8, 10, 12, 14, 16, 18, 20 |
+### Debug Interface
 
-**Note:** The exact KORE-to-Here4 debug-port pad/connector numbering was not retained clearly enough to state reliably, so unsupported KORE pin numbers are intentionally omitted.
+The Here4 was accessed using **SEGGER J-Link over SWD**.
 
-## Physical Evidence
-
-Only a small subset of the available photographs is included to keep the repository focused:
-
-- Complete J-Link / microscope debugging setup
-- PCB-level probing
-- J-Link connector and wiring
-- Microscope-based board inspection
-- MCU/component close-up
-
-See [`images/`](images/).
-
-## Debug Connection
-
-The initial connection attempts produced errors such as:
-
-```text
-Failed to initialize DAP.
-Can not attach to CPU.
-Trying connect under reset.
-Connecting to CPU via connect under reset failed.
-```
-
-The investigation checked the physical SWD path, target reference voltage, common ground, SWDIO, SWCLK, reset, target selection, and connection conditions.
-
-A successful debug connection was subsequently established.
-
-### Successful SW-DP discovery
+Successful debug-port discovery:
 
 ```text
 DAP initialized successfully.
 Found SW-DP with ID 0x2BA01477
-DPIDR: 0x2BA01477
 AP[0]: AHB-AP
 Core found
 Found Cortex-M4 r0p1
 Cortex-M4 identified.
 ```
 
-This established communication with the STM32 debug infrastructure.
+### RDP Analysis
 
-## RDP / Readout Protection
-
-The option-byte region was inspected using:
+The STM32 option bytes were inspected:
 
 ```text
 Mem32 0x1FFFF800, 4
 1FFFF800 = 00FF55AA 00FF00FF 00FF00FF 00FF00FF
 ```
 
-For the STM32F302x6/x8 option-byte layout, the first byte at `0x1FFF F800` is the RDP byte. Because the displayed 32-bit value is represented in little-endian memory order:
-
-```text
-0x00FF55AA
-     ↓
-AA 55 FF 00
-```
-
-Therefore:
+The RDP byte was identified as:
 
 ```text
 RDP = 0xAA
 RDP Level = Level 0
 ```
 
-This means readout protection was disabled for the observed target state.
+This indicated that readout protection was disabled for the observed target state.
 
-## Firmware Presence
+### Firmware Backup
 
-The beginning of Flash was inspected:
-
-```text
-Mem32 0x08000000, 16
-08000000 = 20003EF8 0800131D ...
-```
-
-The first value is consistent with an initial stack pointer inside the 16 KiB SRAM region. The second is a Flash-region address with the Thumb-state bit set, consistent with a reset-handler entry.
-
-## Firmware Extraction
-
-The recorded extraction command was:
+The complete 64 KiB Flash region was extracted using:
 
 ```text
 SaveBin D:\flash_backup.bin, 0x08000000, 0x10000
 ```
 
-The resulting backup was:
+| Property | Value |
+|---|---|
+| Size | 65,536 bytes |
+| Start | `0x08000000` |
+| End | `0x0800FFFF` |
+| SHA-256 | `4fe305311a39fc12cdbbfa30867817561d9cc0e79b808f8fea94856225c08217` |
 
-- **Filename:** `flash_backup.bin`
-- **Size:** 65,536 bytes (64 KiB)
-- **Start address:** `0x08000000`
-- **End address:** `0x0800FFFF`
-- **SHA-256:** `4fe305311a39fc12cdbbfa30867817561d9cc0e79b808f8fea94856225c08217`
+The actual `flash_backup.bin` is **not included** in this repository.
 
-The raw binary itself is intentionally **not published in this repository**.
-
-## Flash Erase & Recovery
-
-The documented sequence was:
-
-```text
-erase
-
-loadbin D:\flash_backup.bin, 0x08000000
-verifybin D:\flash_backup.bin, 0x08000000
-
-mem32 0x08000000, 8
-r
-g
-```
-
-After the erase, the beginning of Flash returned:
+The Flash was subsequently erased and verified through memory readback:
 
 ```text
 08000000 = FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF
-08000010 = FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF
 ```
 
-This confirms the inspected Flash region was in the erased state.
+The complete extraction and recovery record is available in:
 
-The retained project history records subsequent use of the backup for restoration. A successful post-restore `VerifyBin` terminal transcript was not retained, so this repository does **not** claim an independently proven verification pass.
-
-## Verification Boundary
-
-An earlier verification attempt reported a mismatch at `0x08000000`. Because later inspection showed the address as `0xFF` after erase, that earlier result cannot by itself be used to judge backup integrity.
-
-The technically correct recovery sequence is:
-
-```text
-BACKUP
-  ↓
-ERASE
-  ↓
-LOADBIN
-  ↓
-VERIFYBIN
-  ↓
-RESET / RUN
-```
-
-The documentation intentionally distinguishes directly retained terminal evidence from project-history/user-confirmed activity.
-
-## Evidence Summary
-
-| Finding | Evidence | Status |
-|---|---|---|
-| STM32F302K8 target | Debug session / project record | Direct |
-| SWD communication | SW-DP + Cortex-M4 discovery | Direct |
-| Firmware present | Registers + vector table | Direct |
-| RDP Level 0 | Option-byte read | Direct |
-| 64 KiB backup | `SaveBin` output + retained artifact metadata | Direct |
-| Backup/vector correlation | Matching vector-table values | Strong correlation |
-| Flash erase | Erase output + `0xFFFFFFFF` readback | Direct |
-| Firmware restoration | Project history | Historical evidence |
-| Successful post-restore VerifyBin | No retained success log | Not independently proven |
-| Exact KORE-side pin numbers | Not sufficiently preserved | Not specified |
-
-## Separation from Cube Orange+ Work
-
-This repository concerns the **Here4 / STM32F302K8** investigation.
-
-It must not be mixed with the later **Cube Orange+ / STM32H753VI** firmware investigation. In particular, KORE J20 pin mappings from the Cube FMU investigation are not presented as Here4 debug-port mappings.
-
-## Reproducible Workflow
-
-1. Identify the target MCU as STM32F302K8.
-2. Establish physical access to the debug interface.
-3. Connect VTref, SWDIO, SWCLK, NRST and GND.
-4. Configure J-Link for STM32F302K8 and SWD.
-5. Establish the debug connection.
-6. Halt and inspect CPU/debug state.
-7. Inspect the RDP option byte.
-8. Inspect the Flash vector table.
-9. Create a complete 64 KiB backup.
-10. Preserve the backup before any destructive operation.
-11. Erase the target Flash when required.
-12. Read back the erased region.
-13. Restore the retained backup.
-14. Run `VerifyBin`.
-15. Reset and run the target.
-
-## References
-
-- STMicroelectronics — STM32F302K8
-- STMicroelectronics — STM32F302x6/x8 datasheet
-- STMicroelectronics — RM0365 STM32F302 reference manual
-- SEGGER — J-Link interface description
-- CubePilot — KORE Carrier Board
-
-Detailed references and the full technical record are in [`docs/firmware-extraction-report.md`](docs/firmware-extraction-report.md).
+[`docs/firmware-extraction-report.md`](docs/firmware-extraction-report.md)
 
 ---
 
-**Internship context:** CoE-CNDS, VJTI  
-**Focus:** Embedded firmware analysis • SWD • JTAG/SWD debugging • STM32 • Flash extraction & recovery
+## 2. DroneCAN & IMU Analysis
+
+A second part of the investigation focused on the communication between the **Here4 and Cube Orange+ over DroneCAN**, particularly the Here4 IMU data path.
+
+### DroneCAN Node
+
+The Here4 was detected as:
+
+| Parameter | Observed Value |
+|---|---|
+| Node ID | `125` |
+| Node Name | `org.ardupilot.Here4AP` |
+| State | OPERATIONAL |
+| Health | OK |
+
+A **DroneCAN Node ID** is the identifier used to distinguish a device on the CAN network.
+
+Therefore, `Node 125` identifies the Here4 as a participant on the observed DroneCAN network. It is not the MCU ID or firmware version.
+
+### Communication Path
+
+```text
+Here4
+  │
+  │ DroneCAN
+  ▼
+Cube Orange+
+  │
+  ▼
+ArduPilot
+  │
+  ▼
+Mission Planner
+```
+
+### IMU Investigation
+
+The Here4 AP_Periph firmware was examined for its IMU implementation.
+
+The source contained an IMU update path using:
+
+```text
+imu.get_accel()
+imu.get_gyro()
+```
+
+and a DroneCAN:
+
+```text
+uavcan_equipment_ahrs_RawIMU
+```
+
+publisher.
+
+The RawIMU message was identified as:
+
+```text
+DTID = 1003
+```
+
+### Runtime Observation
+
+DroneCAN traffic from Node 125 was successfully observed, including messages such as:
+
+```text
+N125 DTID=1001
+N125 DTID=341
+N125 DTID=1
+N125 DTID=1063
+N125 DTID=20003
+```
+
+However:
+
+```text
+N125 DTID=1003
+```
+
+was **not observed** during the retained CAN-traffic monitoring.
+
+Therefore:
+
+- RawIMU publishing mechanism → **identified in source**
+- RawIMU DTID 1003 → **identified**
+- DroneCAN communication → **confirmed**
+- Here4 accelerometer reception by Cube → **not independently verified**
+- Here4 gyroscope reception by Cube → **not independently verified**
+
+### Magnetometer Validation
+
+The magnetometer path was used to confirm that Here4 sensor data was reaching the Cube through DroneCAN.
+
+Observed Mission Planner output included:
+
+```text
+MAG1 X=-0.030 Y=-0.324 Z=-0.160
+```
+
+This confirmed a working sensor-data path:
+
+```text
+Here4 Magnetometer
+        ↓
+     DroneCAN
+        ↓
+   Cube Orange+
+        ↓
+    ArduPilot
+        ↓
+ Mission Planner
+```
+
+### Key Finding
+
+The investigation established that the examined Here4 firmware contains an **IMU acquisition and RawIMU publishing mechanism**, but the live CAN investigation did **not independently verify RawIMU DTID 1003 transmission/reception**.
+
+The absence of DTID 1003 was therefore treated as an investigation result rather than an assumed root cause.
+
+The detailed DroneCAN/IMU analysis is available in:
+
+[`docs/here4-dronecan-imu-analysis.md`](docs/here4-dronecan-imu-analysis.md)
+
+---
+
+## 3. Evidence
+
+| Investigation | Result |
+|---|---|
+| STM32F302K8 identification | Confirmed |
+| SWD/J-Link access | Confirmed |
+| RDP Level 0 | Confirmed |
+| 64 KiB firmware extraction | Confirmed |
+| Here4 DroneCAN Node 125 | Confirmed |
+| DroneCAN communication | Confirmed |
+| Here4 magnetometer reception | Confirmed |
+| RawIMU publisher in examined source | Identified |
+| RawIMU DTID | `1003` |
+| RawIMU DTID 1003 observed on CAN | Not observed |
+| Here4 accelerometer/gyro reception | Not independently verified |
+
+---
+
+## Documentation
+
+- [`Firmware Extraction Report`](docs/firmware-extraction-report.md)
+- [`DroneCAN & IMU Analysis`](docs/here4-dronecan-imu-analysis.md)
+- [`Physical Evidence`](images/)
+
